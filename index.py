@@ -1,122 +1,26 @@
 import streamlit as st
-import streamlit.components.v1 as components
-import requests
-import re
 import pandas as pd
 import random
-import os
-import json
-import time
+
+from calculator import calc_profit_from_current_amount
+from data_fetch import fetch_fund_holdings, fetch_real_nav, fetch_sina_data
+from market import get_market_clock
+from storage import (
+    add_favorite_fund,
+    get_cached_fund_codes,
+    load_favorite_funds,
+    load_invest_amts,
+    move_favorite_to_top,
+    normalize_fund_code,
+    remove_favorite_fund,
+    save_favorite_funds,
+    save_invest_amts,
+)
+from styles import SIDEBAR_CSS
 
 # 设置网页配置
 st.set_page_config(page_title="基金净值实时估算器", layout="wide")
 st.title("📈 基金净值实时估算工具")
-
-# --- 核心函数库 (保持不变) ---
-
-
-@st.cache_data
-def get_cached_fund_codes():
-    file_path = "fund_codes_cache.json"
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                codes = json.load(f)
-                if codes and isinstance(codes, list):
-                    return codes
-        except:
-            pass
-    return ["001811", "161725", "512690", "005827", "163406", "003095", "005911", "001838", "161022", "519670"]
-
-
-# 投资金额的本地缓存管理，避免每次刷新都丢失输入的金额数据
-def load_invest_amts():
-    if os.path.exists("invest_cache.json"):
-        try:
-            with open("invest_cache.json", "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            pass
-    return {}
-
-
-# 保存投资金额到本地缓存文件，确保用户输入的金额在页面刷新后仍然保留
-def save_invest_amts(data):
-    try:
-        with open("invest_cache.json", "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-    except:
-        pass
-
-
-def normalize_fund_code(fund_code):
-    code = str(fund_code).strip()
-    if not code:
-        return ""
-    return code.zfill(6) if code.isdigit() and len(code) <= 6 else code
-
-
-def load_favorite_funds():
-    file_path = "favorite_funds.json"
-    if not os.path.exists(file_path):
-        return []
-
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            raw_funds = json.load(f)
-    except:
-        return []
-
-    favorites = []
-    seen_codes = set()
-    for item in raw_funds if isinstance(raw_funds, list) else []:
-        if isinstance(item, dict):
-            code = normalize_fund_code(item.get("code", ""))
-            name = str(item.get("name", "")).strip()
-        else:
-            code = normalize_fund_code(item)
-            name = ""
-
-        if code and code not in seen_codes:
-            favorites.append({"code": code, "name": name})
-            seen_codes.add(code)
-    return favorites
-
-
-def save_favorite_funds(favorites):
-    try:
-        with open("favorite_funds.json", "w", encoding="utf-8") as f:
-            json.dump(favorites, f, ensure_ascii=False, indent=2)
-    except:
-        pass
-
-
-def add_favorite_fund(fund_code, fund_name=""):
-    code = normalize_fund_code(fund_code)
-    if not code:
-        return False
-
-    name = str(fund_name or "").strip()
-    for favorite in st.session_state.favorite_funds:
-        if favorite["code"] == code:
-            if name and not favorite.get("name"):
-                favorite["name"] = name
-                save_favorite_funds(st.session_state.favorite_funds)
-            return False
-
-    st.session_state.favorite_funds.append({"code": code, "name": name})
-    save_favorite_funds(st.session_state.favorite_funds)
-    return True
-
-
-def remove_favorite_fund(fund_code):
-    code = normalize_fund_code(fund_code)
-    st.session_state.favorite_funds = [
-        favorite for favorite in st.session_state.favorite_funds
-        if favorite["code"] != code
-    ]
-    save_favorite_funds(st.session_state.favorite_funds)
-
 
 def switch_fund(fund_code):
     st.session_state.fund_code = normalize_fund_code(fund_code)
@@ -124,131 +28,6 @@ def switch_fund(fund_code):
     st.session_state.fund_name = ""
     st.session_state.prev_profit = None
     st.session_state.prev_estimate = None
-
-
-def fetch_sina_data(stocks_list):
-    if not stocks_list:
-        return []
-    codes = [s["code"] for s in stocks_list]
-    url = f"http://hq.sinajs.cn/list={','.join(codes)}"
-    headers = {"Referer": "http://finance.sina.com.cn/"}
-    try:
-        response = requests.get(url, headers=headers, timeout=5)
-        response.encoding = 'gbk'
-        text = response.text
-        results = []
-        for stock in stocks_list:
-            code = stock["code"]
-            match = re.search(f'var hq_str_{code}="(.*?)";', text)
-            change = 0.0
-            if match:
-                data = match.group(1).split(',')
-                if code.startswith('hk') and len(data) > 8:
-                    change = float(data[8])
-                elif len(data) > 3:
-                    price, pre_close = float(data[3]), float(data[2])
-                    change = (price - pre_close) / pre_close * \
-                        100 if pre_close > 0 else 0.0
-            results.append({
-                "名称": stock["name"], "代码": stock["code"], "持仓占比(%)": stock["weight"],
-                "实时涨跌幅(%)": round(change, 2), "贡献度(%)": round(change * (stock["weight"] / 100), 4)
-            })
-        return results
-    except:
-        return []
-
-
-def fetch_fund_holdings(fund_code):
-    url = f"http://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={fund_code}&topline=100&year=&month="
-    headers = {"Referer": f"http://fundf10.eastmoney.com/ccmx_{fund_code}.html"}
-    try:
-        response = requests.get(url, headers=headers, timeout=5)
-        text = response.text
-        fund_name = ""
-        name_match = re.search(
-            r"<label class=['\"]left['\"]><a title=['\"]([^'\"]+)['\"]", text)
-        if name_match:
-            fund_name = name_match.group(1)
-        tbody_match = re.search(r'<tbody>(.*?)</tbody>', text, re.S)
-        latest_text = tbody_match.group(1) if tbody_match else text
-        holdings = []
-        rows = re.findall(r'<tr>(.*?)</tr>', latest_text, re.S)
-        for row in rows:
-            name_patt = re.findall(
-                r"<a href=['\"][^'\"]*['\"]>([^<]+)</a>", row)
-            weight_match = re.search(
-                r"<td class=['\"]tor['\"]>(\d+\.\d+)%</td>", row)
-            if len(name_patt) >= 2 and weight_match:
-                stock_code, stock_name, weight = name_patt[0].strip(
-                ), name_patt[1].strip(), float(weight_match.group(1))
-                market_code = stock_code
-                if market_code.isdigit():
-                    if len(market_code) == 5:
-                        market_code = "hk" + market_code
-                    elif market_code.startswith("6"):
-                        market_code = "sh" + market_code
-                    elif market_code.startswith("0") or market_code.startswith("3"):
-                        market_code = "sz" + market_code
-                holdings.append(
-                    {"name": stock_name, "code": market_code, "weight": weight})
-        return fund_name, holdings
-    except:
-        return "", []
-
-
-def fetch_real_nav(fund_code):
-    url_history = "https://api.fund.eastmoney.com/f10/lsjz"
-    headers = {
-        "Referer": f"https://fundf10.eastmoney.com/jjjz_{fund_code}.html",
-        "User-Agent": "Mozilla/5.0"
-    }
-    try:
-        response = requests.get(
-            url_history,
-            params={"fundCode": fund_code, "pageIndex": 1, "pageSize": 2},
-            headers=headers,
-            timeout=3
-        )
-        data = response.json()
-        rows = data.get("Data", {}).get("LSJZList", [])
-        if rows:
-            latest = rows[0]
-            real_date = latest.get("FSRQ", "")
-            real_nav = latest.get("DWJZ", "-")
-            display_chg = str(latest.get("JZZZL", "0")).replace("%", "")
-            calc_chg = display_chg
-            if len(rows) >= 2:
-                latest_nav = float(latest.get("DWJZ", 0))
-                prev_nav = float(rows[1].get("DWJZ", 0))
-                if prev_nav > 0:
-                    calc_chg = (latest_nav - prev_nav) / prev_nav * 100
-            return real_date, real_nav, display_chg, calc_chg
-    except:
-        pass
-
-    url_pc = f"http://fund.eastmoney.com/{fund_code}.html"
-    try:
-        response = requests.get(url_pc, timeout=3)
-        response.encoding = 'utf-8'
-        text = response.text
-        date_match = re.search(r'单位净值.*?\(\s*(?:</span>)?\s*([^)<]+)\)', text)
-        data_match = re.search(
-            r'单位净值.*?<dd class="dataNums">\s*<span[^>]*>([^<]+)</span>\s*<span[^>]*>([^<]+)</span>', text, re.S)
-        if date_match and data_match:
-            display_chg = data_match.group(2).strip().replace('%', '')
-            return date_match.group(1).strip(), data_match.group(1).strip(), display_chg, display_chg
-    except:
-        pass
-    return "", "-", "0", 0.0
-
-
-def calc_profit_from_current_amount(current_amount, change_percent):
-    # 支付宝展示的金额是含当天收益后的当前资产，收益需从当前金额反推。
-    change_rate = change_percent / 100
-    growth_factor = 1 + change_rate
-    if growth_factor <= 0:
-        return current_amount * change_rate
-    return current_amount - (current_amount / growth_factor)
 
 
 # --- 状态管理 ---
@@ -266,265 +45,30 @@ if 'prev_estimate' not in st.session_state:
     st.session_state.prev_estimate = None
 if 'favorite_funds' not in st.session_state:
     st.session_state.favorite_funds = load_favorite_funds()
+market_clock = get_market_clock()
 
 # --- 侧边栏参数控制 (静态部分) ---
 with st.sidebar:
-    st.markdown("""
-        <style>
-        [data-testid="stSidebar"] {
-            background: #f3f6fb;
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-            gap: 0.65rem;
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
-            background: rgba(255, 255, 255, 0.78);
-            border: 1px solid #dce4ee;
-            border-radius: 14px;
-            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
-        }
-        [data-testid="stSidebar"] .sidebar-section-title {
-            display: flex;
-            align-items: center;
-            gap: 0.45rem;
-            color: #172033;
-            font-size: 1.05rem;
-            font-weight: 800;
-            line-height: 1.2;
-            margin: 0 0 0.45rem;
-        }
-        [data-testid="stSidebar"] label {
-            color: #344054;
-            font-size: 0.86rem;
-            font-weight: 600;
-        }
-        [data-testid="stSidebar"] input {
-            border-radius: 10px;
-            border-color: #e1e7ef;
-        }
-        [data-testid="stSidebar"] .stButton {
-            margin-bottom: 0 !important;
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.settings-actions) [data-testid="stElementContainer"]:has(.stButton) {
-            margin: 0 !important;
-            padding: 0 !important;
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.settings-actions) [data-testid="stElementContainer"]:has(.stButton) + [data-testid="stElementContainer"]:has(.stButton) {
-            margin-top: -0.44rem !important;
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.settings-actions) .stButton > button {
-            min-height: 2.05rem;
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) [data-testid="stVerticalBlock"] {
-            gap: 0.45rem;
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-scroll-area) {
-            background: transparent;
-            border: 0;
-            box-shadow: none;
-            padding: 0;
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-scroll-area) [data-testid="stVerticalBlock"] {
-            gap: 0.45rem;
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) [data-testid="stElementContainer"]:has(.stButton) {
-            margin: 0 !important;
-            padding: 0 0.18rem !important;
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) .stButton > button {
-            min-height: 2.15rem;
-            white-space: normal;
-            word-break: break-word;
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) .stButton > button[kind="primary"] {
-            background: #fff1f1;
-            border-color: #ff4b4b;
-            color: #d92d20;
-            box-shadow: inset 0 0 0 1px rgba(255, 75, 75, 0.14);
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) .stButton > button[kind="primary"] *,
-        [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) .stButton > button[kind="primary"] p {
-            color: #d92d20;
-        }
-        [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) .favorite-remove-action + div {
-            margin-top: 0.2rem !important;
-            padding-bottom: 0.72rem !important;
-        }
-        [data-testid="stSidebar"] .stButton > button {
-            min-height: 2.15rem;
-            border-radius: 999px;
-            border-color: #d0d8e4;
-            background: #ffffff;
-            color: #1f2937;
-            font-size: 0.875rem;
-            font-weight: 600;
-            padding-top: 0.25rem;
-            padding-bottom: 0.25rem;
-            line-height: 1.2;
-        }
-        [data-testid="stSidebar"] .stButton > button *,
-        [data-testid="stSidebar"] .stButton > button p {
-            font-size: 0.875rem;
-            line-height: 1.2;
-            font-weight: inherit;
-            margin: 0;
-        }
-        [data-testid="stSidebar"] .stButton > button:hover {
-            border-color: #ff7a7a;
-            color: #d92d20;
-            background: #fff8f8;
-        }
-        [data-testid="stSidebar"] .stButton > button[kind="primary"] {
-            background: #ff4b4b;
-            border-color: #ff4b4b;
-            color: #ffffff;
-            font-weight: 700;
-            box-shadow: 0 1px 2px rgba(255, 75, 75, 0.24);
-        }
-        [data-testid="stSidebar"] .stButton > button[kind="primary"] *,
-        [data-testid="stSidebar"] .stButton > button[kind="primary"] p {
-            color: #ffffff;
-            font-weight: 700;
-        }
-        [data-testid="stSidebar"] .favorite-list {
-            display: flex;
-            flex-direction: column;
-            gap: 0.45rem;
-            margin-top: 0.15rem;
-            overflow: hidden;
-            padding: 0.08rem 0.18rem 0.38rem;
-            box-sizing: border-box;
-        }
-        [data-testid="stSidebar"] .favorite-item,
-        [data-testid="stSidebar"] .favorite-remove {
-            align-items: center;
-            border: 1px solid #d0d8e4;
-            border-radius: 999px;
-            box-sizing: border-box;
-            display: grid;
-            font-size: 0.875rem;
-            font-weight: 600;
-            line-height: 1.15;
-            min-height: 2.15rem;
-            padding: 0.42rem 0.8rem 0.34rem;
-            place-items: center;
-            text-align: center;
-            text-decoration: none !important;
-            transition: all 0.16s ease;
-            white-space: normal;
-            word-break: break-word;
-            width: calc(100% - 0.08rem);
-        }
-        [data-testid="stSidebar"] .favorite-item {
-            background: #ffffff;
-            color: #243044 !important;
-            margin: 0 auto;
-        }
-        [data-testid="stSidebar"] .favorite-item:hover {
-            background: #fff8f8;
-            border-color: #ffb0b0;
-            color: #d92d20 !important;
-        }
-        [data-testid="stSidebar"] .favorite-item.active {
-            background: #fff1f1;
-            border-color: #ff4b4b;
-            color: #d92d20 !important;
-            font-weight: 700;
-            box-shadow: inset 0 0 0 1px rgba(255, 75, 75, 0.14);
-        }
-        [data-testid="stSidebar"] .favorite-remove {
-            background: #ffffff;
-            border-color: #ffc9c9;
-            color: #d92d20 !important;
-            margin: 0.2rem auto 0;
-        }
-        [data-testid="stSidebar"] .favorite-remove:hover {
-            background: #fff1f1;
-            border-color: #ff8a8a;
-            color: #b42318 !important;
-        }
-        [data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
-            margin-top: -0.15rem;
-        }
-        @media (prefers-color-scheme: dark) {
-            [data-testid="stSidebar"] {
-                background: #0b1118;
-                border-right: 1px solid #1f2937;
-            }
-            [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
-                background: rgba(17, 24, 39, 0.88);
-                border-color: #263244;
-                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-            }
-            [data-testid="stSidebar"] .sidebar-section-title,
-            [data-testid="stSidebar"] label {
-                color: #e5e7eb;
-            }
-            [data-testid="stSidebar"] input {
-                background: #0f172a;
-                border-color: #334155;
-                color: #f8fafc;
-            }
-            [data-testid="stSidebar"] [data-testid="stNumberInput"] button,
-            [data-testid="stSidebar"] [data-testid="stNumberInput"] input {
-                background: #0f172a;
-                border-color: #334155;
-                color: #f8fafc;
-            }
-            [data-testid="stSidebar"] .stButton > button {
-                background: #111827;
-                border-color: #334155;
-                color: #e5e7eb;
-            }
-            [data-testid="stSidebar"] .stButton > button *,
-            [data-testid="stSidebar"] .stButton > button p {
-                color: inherit;
-            }
-            [data-testid="stSidebar"] .stButton > button:hover {
-                background: #1f2937;
-                border-color: #ff7a7a;
-                color: #ff7a7a;
-            }
-            [data-testid="stSidebar"] .stButton > button[kind="primary"] {
-                background: #ff4b4b;
-                border-color: #ff4b4b;
-                color: #ffffff;
-            }
-            [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) .stButton > button[kind="primary"] {
-                background: rgba(255, 75, 75, 0.18);
-                border-color: #ff4b4b;
-                color: #ff8a8a;
-            }
-            [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) .stButton > button[kind="primary"] *,
-            [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) .stButton > button[kind="primary"] p {
-                color: #ff8a8a;
-            }
-            [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
-            [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
-                color: #94a3b8;
-            }
-            [data-testid="stSidebar"] [role="slider"] {
-                color: #ff4b4b;
-            }
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    st.markdown(SIDEBAR_CSS, unsafe_allow_html=True)
 
     with st.container(border=True):
         st.markdown('<div class="sidebar-section-title">⭐ 关注列表</div>',
                     unsafe_allow_html=True)
         if st.session_state.favorite_funds:
             current_in_favorites = False
+            current_favorite_index = None
             st.markdown('<div class="favorite-actions"></div>',
                         unsafe_allow_html=True)
             with st.container(height=245, border=False):
                 st.markdown('<div class="favorite-scroll-area"></div>',
                             unsafe_allow_html=True)
-                for favorite in st.session_state.favorite_funds:
+                for index, favorite in enumerate(st.session_state.favorite_funds):
                     code = favorite["code"]
                     label_name = favorite.get("name") or "未命名基金"
                     is_current = code == st.session_state.fund_code
                     current_in_favorites = current_in_favorites or is_current
+                    if is_current:
+                        current_favorite_index = index
                     if st.button(
                         f"{code} {label_name}",
                         key=f"favorite_open_{code}",
@@ -535,10 +79,21 @@ with st.sidebar:
                         st.rerun()
 
             if current_in_favorites:
-                st.markdown('<div class="favorite-remove-action"></div>',
+                st.markdown('<div class="favorite-manage-actions"></div>',
                             unsafe_allow_html=True)
+                if current_favorite_index is not None and current_favorite_index > 0:
+                    if st.button("⬆️ 置顶当前", key="favorite_pin_current", width="stretch"):
+                        st.session_state.favorite_funds = move_favorite_to_top(
+                            st.session_state.favorite_funds,
+                            st.session_state.fund_code
+                        )
+                        st.rerun()
+
                 if st.button("🚫 从关注列表移除当前", key="favorite_remove_current", width="stretch"):
-                    remove_favorite_fund(st.session_state.fund_code)
+                    st.session_state.favorite_funds = remove_favorite_fund(
+                        st.session_state.favorite_funds,
+                        st.session_state.fund_code
+                    )
                     st.rerun()
         else:
             st.caption("暂无关注基金，可在参数设置中加入当前基金。")
@@ -558,8 +113,11 @@ with st.sidebar:
                 st.rerun()
 
             if st.button("⭐ 加入关注", width="stretch"):
-                add_favorite_fund(st.session_state.fund_code,
-                                  st.session_state.fund_name)
+                add_favorite_fund(
+                    st.session_state.favorite_funds,
+                    st.session_state.fund_code,
+                    st.session_state.fund_name
+                )
                 st.rerun()
 
             if st.button("🔄 从天天基金获取持仓", type="primary", width="stretch"):
@@ -616,7 +174,10 @@ with st.sidebar:
         else:
             refresh_interval = 2.0
 
-        st.caption("开启后系统将自动更新实时行情，无需手动操作。")
+        auto_refresh_active = auto_refresh and market_clock["is_trading"]
+        st.caption(
+            f"当前状态: {market_clock['status']}｜{market_clock['detail']}")
+        st.caption(f"上海时间: {market_clock['time_text']}")
 
 # --- 主界面显示 ---
 if not st.session_state.fund_name and st.session_state.fund_code:
@@ -634,9 +195,28 @@ else:
 
 
 # 通过 run_every 参数实现自动刷新，避免使用 st.experimental_rerun() 导致的焦点丢失问题
-@st.fragment(run_every=refresh_interval if auto_refresh else None)
+@st.fragment(run_every=refresh_interval if auto_refresh_active else None)
 def show_realtime_content():
-    data_list = fetch_sina_data(st.session_state.top_10)
+    update_clock = get_market_clock()
+    fund_code = st.session_state.fund_code
+    if 'last_realtime_data' not in st.session_state:
+        st.session_state.last_realtime_data = {}
+    if 'last_realtime_update_at' not in st.session_state:
+        st.session_state.last_realtime_update_at = {}
+
+    cached_data_list = st.session_state.last_realtime_data.get(fund_code)
+    should_fetch_realtime = (
+        update_clock["is_trading"] or
+        not cached_data_list or
+        not auto_refresh
+    )
+    if should_fetch_realtime:
+        data_list = fetch_sina_data(st.session_state.top_10)
+        if data_list:
+            st.session_state.last_realtime_data[fund_code] = data_list
+            st.session_state.last_realtime_update_at[fund_code] = update_clock["time_text"]
+    else:
+        data_list = cached_data_list
 
     if data_list:
         df = pd.DataFrame(data_list)
@@ -714,7 +294,9 @@ def show_realtime_content():
             "📉 " if yesterday_profit < 0 else "")
 
         # --- 记录实时走势数据 ---
-        current_time = time.strftime('%H:%M:%S')
+        current_time = update_clock["now"].strftime('%H:%M:%S')
+        update_time_text = st.session_state.last_realtime_update_at.get(
+            fund_code, update_clock["time_text"])
         if 'trend_records' not in st.session_state:
             st.session_state.trend_records = {}
 
@@ -722,14 +304,22 @@ def show_realtime_content():
         if st.session_state.fund_code not in st.session_state.trend_records:
             st.session_state.trend_records[st.session_state.fund_code] = []
 
-        trend_list = st.session_state.trend_records[st.session_state.fund_code]
+        trend_list = [
+            row for row in st.session_state.trend_records[fund_code]
+            if isinstance(row, dict) and "时间" in row and "估值(%)" in row
+        ]
+        should_record_point = (
+            not trend_list or
+            (should_fetch_realtime and trend_list[-1].get('时间') != current_time)
+        )
+
         # 只在有新的时间变动或者数值产生时追加，避免一秒内重复录入
-        if not trend_list or trend_list[-1]['时间'] != current_time:
+        if should_record_point:
             trend_list.append({'时间': current_time, '估值(%)': final_estimate})
             # 保留最近的1000个点，防止随着时间推移数据过大拖慢性能
             if len(trend_list) > 1000:
                 trend_list = trend_list[-1000:]
-            st.session_state.trend_records[st.session_state.fund_code] = trend_list
+        st.session_state.trend_records[fund_code] = trend_list
 
         df_trend = pd.DataFrame(trend_list).set_index('时间')
 
@@ -801,7 +391,9 @@ def show_realtime_content():
                         "持仓排名", format="%d")
                 }
             )
-            st.caption(f"最后更新时间: {current_time}")
+            refresh_status = "运行中" if auto_refresh and update_clock["is_trading"] else "已暂停"
+            st.caption(
+                f"行情更新时间: {update_time_text}｜自动刷新: {refresh_status}｜市场状态: {update_clock['status']}")
 
         with right_col:
             st.subheader("📈 实时估值走势")
@@ -824,7 +416,8 @@ def show_realtime_content():
                 f"说明: 走势只记录您当前打开网页并开启刷新期间 ({df_trend.index[0]} 起) 的走向，切换基金或关闭重新打开都会重置。")
 
     else:
-        st.info("数据加载中或开盘时间内未获取到行情...")
+        pause_text = "" if auto_refresh and update_clock["is_trading"] else f" 当前市场状态: {update_clock['status']}，自动刷新已暂停。"
+        st.info(f"数据加载中或开盘时间内未获取到行情...{pause_text}")
 
 
 # 执行局部刷新函数
