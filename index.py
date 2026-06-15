@@ -788,15 +788,18 @@ def show_realtime_content():
             st.subheader("详细持仓变动")
             # 添加持仓排名列
             df.insert(0, "持仓排名", range(1, len(df) + 1))
-            # 转换持仓排名为字符串形式以便更好地控制对齐
-            df["持仓排名"] = df["持仓排名"].astype(str)
 
             st.dataframe(
                 df.style.format(
                     {'持仓占比(%)': '{:.2f}', '实时涨跌幅(%)': '{:.2f}', '贡献度(%)': '{:.4f}'})
                 .set_properties(subset=['持仓排名'], **{'text-align': 'left'})
                 .map(lambda x: f"color: {'red' if x > 0 else 'green'}", subset=['实时涨跌幅(%)', '贡献度(%)']),
-                width="stretch", hide_index=True
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "持仓排名": st.column_config.NumberColumn(
+                        "持仓排名", format="%d")
+                }
             )
             st.caption(f"最后更新时间: {current_time}")
 
