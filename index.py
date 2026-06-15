@@ -446,6 +446,67 @@ with st.sidebar:
         [data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
             margin-top: -0.15rem;
         }
+        @media (prefers-color-scheme: dark) {
+            [data-testid="stSidebar"] {
+                background: #0b1118;
+                border-right: 1px solid #1f2937;
+            }
+            [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
+                background: rgba(17, 24, 39, 0.88);
+                border-color: #263244;
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+            }
+            [data-testid="stSidebar"] .sidebar-section-title,
+            [data-testid="stSidebar"] label {
+                color: #e5e7eb;
+            }
+            [data-testid="stSidebar"] input {
+                background: #0f172a;
+                border-color: #334155;
+                color: #f8fafc;
+            }
+            [data-testid="stSidebar"] [data-testid="stNumberInput"] button,
+            [data-testid="stSidebar"] [data-testid="stNumberInput"] input {
+                background: #0f172a;
+                border-color: #334155;
+                color: #f8fafc;
+            }
+            [data-testid="stSidebar"] .stButton > button {
+                background: #111827;
+                border-color: #334155;
+                color: #e5e7eb;
+            }
+            [data-testid="stSidebar"] .stButton > button *,
+            [data-testid="stSidebar"] .stButton > button p {
+                color: inherit;
+            }
+            [data-testid="stSidebar"] .stButton > button:hover {
+                background: #1f2937;
+                border-color: #ff7a7a;
+                color: #ff7a7a;
+            }
+            [data-testid="stSidebar"] .stButton > button[kind="primary"] {
+                background: #ff4b4b;
+                border-color: #ff4b4b;
+                color: #ffffff;
+            }
+            [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) .stButton > button[kind="primary"] {
+                background: rgba(255, 75, 75, 0.18);
+                border-color: #ff4b4b;
+                color: #ff8a8a;
+            }
+            [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) .stButton > button[kind="primary"] *,
+            [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(.favorite-actions) .stButton > button[kind="primary"] p {
+                color: #ff8a8a;
+            }
+            [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+            [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+                color: #94a3b8;
+            }
+            [data-testid="stSidebar"] [role="slider"] {
+                color: #ff4b4b;
+            }
+        }
         </style>
     """, unsafe_allow_html=True)
 
