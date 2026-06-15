@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Local app data / personal cache
+invest_cache.json
+favorite_funds.json
+watchlist_cache.json
+fund_codes_cache.json
+
+# Logs
+*.log
+logs/
